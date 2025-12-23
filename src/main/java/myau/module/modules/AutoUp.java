@@ -4,7 +4,8 @@ import myau.event.EventTarget;
 import myau.event.types.EventType;
 import myau.events.UpdateEvent;
 import myau.module.Module;
-import myau.util.*;
+import myau.util.BlockUtil;
+import myau.util.PacketUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.play.client.C07PacketPlayerDigging;
 import net.minecraft.util.*;
@@ -12,68 +13,149 @@ import net.minecraft.util.*;
 public class AutoUp extends Module {
 
     private static final Minecraft mc = Minecraft.getMinecraft();
-    private final TimerUtil timer = new TimerUtil();
 
-    private boolean isMining = false;
-    private int mineTicks = 0;
+    private enum State {
+        IDLE,
+        MINING,
+        PLACING
+    }
+
+    private State state = State.IDLE;
+
+    private BlockPos miningPos = null;
+    private float breakProgress = 0.0F;
 
     public AutoUp() {
         super("AutoUp", false);
     }
 
+    /* ================= 工具方法 ================= */
+
     private BlockPos getHeadPos() {
         return new BlockPos(
                 MathHelper.floor_double(mc.thePlayer.posX),
-                MathHelper.floor_double(mc.thePlayer.posY + mc.thePlayer.height + 0.1),
+                MathHelper.floor_double(mc.thePlayer.posY + mc.thePlayer.height),
                 MathHelper.floor_double(mc.thePlayer.posZ)
         );
     }
 
-    private boolean hasBlockAbove() {
-        return !BlockUtil.isReplaceable(getHeadPos());
-    }
-
-    private void lookUpSilent(UpdateEvent event) {
-        event.setRotation(event.getYaw(), -90.0F, 3);
-    }
-
-    private void mineHead(BlockPos pos) {
-        if (!isMining) {
-            isMining = true;
-            mineTicks = 0;
-            PacketUtil.sendPacket(new C07PacketPlayerDigging(
-                    C07PacketPlayerDigging.Action.START_DESTROY_BLOCK,
-                    pos,
-                    EnumFacing.DOWN
-            ));
-        }
-    }
-    
-    private void placeBelow() {
-        BlockPos below = new BlockPos(
+    private BlockPos getBelowPos() {
+        return new BlockPos(
                 MathHelper.floor_double(mc.thePlayer.posX),
                 MathHelper.floor_double(mc.thePlayer.posY - 1),
                 MathHelper.floor_double(mc.thePlayer.posZ)
         );
-    
-        if (!BlockUtil.isReplaceable(below)) return;
-    
+    }
+
+    /* ================= Update ================= */
+
+    @EventTarget
+    public void onUpdate(UpdateEvent event) {
+
+        // ★ 关键：模块 & PRE 判断
+        if (!this.isEnabled() || event.getType() != EventType.PRE)
+            return;
+
+        if (mc.thePlayer == null || mc.theWorld == null)
+            return;
+
+        // 静默抬头
+        event.setRotation(event.getYaw(), -90.0F, 3);
+
+        switch (state) {
+            case IDLE:
+                handleIdle();
+                break;
+
+            case MINING:
+                handleMining();
+                break;
+
+            case PLACING:
+                handlePlacing();
+                break;
+        }
+    }
+
+    /* ================= 状态逻辑 ================= */
+
+    private void handleIdle() {
+        BlockPos head = getHeadPos();
+
+        if (!BlockUtil.isReplaceable(head)) {
+            startMining(head);
+        } else {
+            state = State.PLACING;
+        }
+    }
+
+    /* ================= 挖方块（参考 BedNuker） ================= */
+
+    private void startMining(BlockPos pos) {
+        this.miningPos = pos;
+        this.breakProgress = 0.0F;
+
+        PacketUtil.sendPacket(new C07PacketPlayerDigging(
+                C07PacketPlayerDigging.Action.START_DESTROY_BLOCK,
+                pos,
+                EnumFacing.DOWN
+        ));
+
+        state = State.MINING;
+    }
+
+    private void handleMining() {
+        if (miningPos == null || BlockUtil.isReplaceable(miningPos)) {
+            state = State.PLACING;
+            return;
+        }
+
+        // 模拟真实挖掘进度（可根据需要调）
+        breakProgress += 0.25F;
+
+        mc.effectRenderer.addBlockHitEffects(miningPos, EnumFacing.DOWN);
+
+        if (breakProgress >= 1.0F) {
+            PacketUtil.sendPacket(new C07PacketPlayerDigging(
+                    C07PacketPlayerDigging.Action.STOP_DESTROY_BLOCK,
+                    miningPos,
+                    EnumFacing.DOWN
+            ));
+            state = State.PLACING;
+        }
+    }
+
+    /* ================= 垫方块（参考 Scaffold） ================= */
+
+    private void handlePlacing() {
+
+        if (!mc.thePlayer.onGround) {
+            mc.thePlayer.jump();
+            return;
+        }
+
+        BlockPos below = getBelowPos();
+
+        if (!BlockUtil.isReplaceable(below)) {
+            state = State.IDLE;
+            return;
+        }
+
         for (EnumFacing facing : EnumFacing.VALUES) {
-            if (facing == EnumFacing.DOWN) continue;
-    
+            if (facing == EnumFacing.DOWN)
+                continue;
+
             BlockPos neighbor = below.offset(facing);
+
             if (!BlockUtil.isReplaceable(neighbor)) {
-    
-                float yaw = mc.thePlayer.rotationYaw;
-                float pitch = mc.thePlayer.rotationPitch;
-    
+
                 Vec3 hitVec = BlockUtil.getHitVec(
                         neighbor,
                         facing.getOpposite(),
-                        yaw,
-                        pitch
+                        mc.thePlayer.rotationYaw,
+                        mc.thePlayer.rotationPitch
                 );
-    
+
                 if (mc.playerController.onPlayerRightClick(
                         mc.thePlayer,
                         mc.theWorld,
@@ -84,45 +166,19 @@ public class AutoUp extends Module {
                 )) {
                     mc.thePlayer.swingItem();
                 }
+
+                state = State.IDLE;
                 return;
             }
         }
     }
 
-    @EventTarget
-    public void onUpdate(UpdateEvent event) {
-        if (event.getType() != EventType.PRE) return;
-        if (mc.thePlayer == null || mc.theWorld == null) return;
-        if (!timer.hasTimeElapsed(150)) return;
-
-        timer.reset();
-        lookUpSilent(event);
-
-        if (hasBlockAbove()) {
-            mineHead(getHeadPos());
-        } else {
-            if (mc.thePlayer.onGround) {
-                mc.thePlayer.jump();
-            }
-            placeBelow();
-        }
-
-        if (isMining) {
-            mineTicks++;
-            if (mineTicks >= 4) {
-                PacketUtil.sendPacket(new C07PacketPlayerDigging(
-                        C07PacketPlayerDigging.Action.STOP_DESTROY_BLOCK,
-                        getHeadPos(),
-                        EnumFacing.DOWN
-                ));
-                isMining = false;
-            }
-        }
-    }
+    /* ================= 禁用 ================= */
 
     @Override
     public void onDisabled() {
-        isMining = false;
-        mineTicks = 0;
+        state = State.IDLE;
+        miningPos = null;
+        breakProgress = 0.0F;
     }
 }
