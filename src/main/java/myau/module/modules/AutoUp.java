@@ -5,14 +5,18 @@ import myau.event.types.EventType;
 import myau.events.UpdateEvent;
 import myau.module.Module;
 import myau.util.BlockUtil;
+import myau.util.ItemUtil;
 import myau.util.PacketUtil;
 import net.minecraft.client.Minecraft;
+import net.minecraft.item.ItemStack;
 import net.minecraft.network.play.client.C07PacketPlayerDigging;
 import net.minecraft.util.*;
 
 public class AutoUp extends Module {
 
     private static final Minecraft mc = Minecraft.getMinecraft();
+
+    /* ================= 状态 ================= */
 
     private enum State {
         IDLE,
@@ -24,6 +28,11 @@ public class AutoUp extends Module {
 
     private BlockPos miningPos = null;
     private float breakProgress = 0.0F;
+
+    /* ================= 物品切换（对齐 Scaffold / AutoTool） ================= */
+
+    private int lastSlot = -1;
+    private int blockCount = -1;
 
     public AutoUp() {
         super("AutoUp", false);
@@ -47,12 +56,65 @@ public class AutoUp extends Module {
         );
     }
 
+    private void saveSlot() {
+        if (lastSlot == -1) {
+            lastSlot = mc.thePlayer.inventory.currentItem;
+        }
+    }
+
+    private void restoreSlot() {
+        if (lastSlot != -1) {
+            mc.thePlayer.inventory.currentItem = lastSlot;
+            lastSlot = -1;
+        }
+    }
+
+    /* ================= 切换到工具（AutoTool 同款） ================= */
+
+    private void switchToTool(BlockPos pos) {
+        int slot = ItemUtil.findInventorySlot(
+                mc.thePlayer.inventory.currentItem,
+                mc.theWorld.getBlockState(pos).getBlock()
+        );
+
+        if (slot != mc.thePlayer.inventory.currentItem) {
+            saveSlot();
+            mc.thePlayer.inventory.currentItem = slot;
+        }
+    }
+
+    /* ================= 切换到方块（Scaffold 同款） ================= */
+
+    private boolean switchToBlock() {
+        ItemStack stack = mc.thePlayer.getHeldItem();
+        int count = ItemUtil.isBlock(stack) ? stack.stackSize : 0;
+        blockCount = Math.min(blockCount, count);
+
+        if (blockCount <= 0) {
+            int slot = mc.thePlayer.inventory.currentItem;
+            if (blockCount == 0) {
+                slot--;
+            }
+            for (int i = slot; i > slot - 9; i--) {
+                int hotbarSlot = (i % 9 + 9) % 9;
+                ItemStack candidate = mc.thePlayer.inventory.getStackInSlot(hotbarSlot);
+                if (ItemUtil.isBlock(candidate)) {
+                    saveSlot();
+                    mc.thePlayer.inventory.currentItem = hotbarSlot;
+                    blockCount = candidate.stackSize;
+                    return true;
+                }
+            }
+            return false;
+        }
+        return true;
+    }
+
     /* ================= Update ================= */
 
     @EventTarget
     public void onUpdate(UpdateEvent event) {
 
-        // ★ 关键：模块 & PRE 判断
         if (!this.isEnabled() || event.getType() != EventType.PRE)
             return;
 
@@ -89,11 +151,13 @@ public class AutoUp extends Module {
         }
     }
 
-    /* ================= 挖方块（参考 BedNuker） ================= */
+    /* ================= 挖方块 ================= */
 
     private void startMining(BlockPos pos) {
-        this.miningPos = pos;
-        this.breakProgress = 0.0F;
+        miningPos = pos;
+        breakProgress = 0.0F;
+
+        switchToTool(pos);
 
         PacketUtil.sendPacket(new C07PacketPlayerDigging(
                 C07PacketPlayerDigging.Action.START_DESTROY_BLOCK,
@@ -106,13 +170,12 @@ public class AutoUp extends Module {
 
     private void handleMining() {
         if (miningPos == null || BlockUtil.isReplaceable(miningPos)) {
+            restoreSlot();
             state = State.PLACING;
             return;
         }
 
-        // 模拟真实挖掘进度（可根据需要调）
         breakProgress += 0.25F;
-
         mc.effectRenderer.addBlockHitEffects(miningPos, EnumFacing.DOWN);
 
         if (breakProgress >= 1.0F) {
@@ -121,11 +184,12 @@ public class AutoUp extends Module {
                     miningPos,
                     EnumFacing.DOWN
             ));
+            restoreSlot();
             state = State.PLACING;
         }
     }
 
-    /* ================= 垫方块（参考 Scaffold） ================= */
+    /* ================= 垫方块 ================= */
 
     private void handlePlacing() {
 
@@ -137,6 +201,13 @@ public class AutoUp extends Module {
         BlockPos below = getBelowPos();
 
         if (!BlockUtil.isReplaceable(below)) {
+            restoreSlot();
+            state = State.IDLE;
+            return;
+        }
+
+        if (!switchToBlock()) {
+            restoreSlot();
             state = State.IDLE;
             return;
         }
@@ -148,7 +219,6 @@ public class AutoUp extends Module {
             BlockPos neighbor = below.offset(facing);
 
             if (!BlockUtil.isReplaceable(neighbor)) {
-
                 Vec3 hitVec = BlockUtil.getHitVec(
                         neighbor,
                         facing.getOpposite(),
@@ -167,6 +237,7 @@ public class AutoUp extends Module {
                     mc.thePlayer.swingItem();
                 }
 
+                restoreSlot();
                 state = State.IDLE;
                 return;
             }
@@ -180,5 +251,7 @@ public class AutoUp extends Module {
         state = State.IDLE;
         miningPos = null;
         breakProgress = 0.0F;
+        lastSlot = -1;
+        blockCount = -1;
     }
 }
