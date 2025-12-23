@@ -48,22 +48,32 @@ public class AutoUp extends Module {
             ));
         }
     }
-
+    
     private void placeBelow() {
         BlockPos below = new BlockPos(
                 MathHelper.floor_double(mc.thePlayer.posX),
                 MathHelper.floor_double(mc.thePlayer.posY - 1),
                 MathHelper.floor_double(mc.thePlayer.posZ)
         );
-
+    
         if (!BlockUtil.isReplaceable(below)) return;
-
+    
         for (EnumFacing facing : EnumFacing.VALUES) {
             if (facing == EnumFacing.DOWN) continue;
-
+    
             BlockPos neighbor = below.offset(facing);
             if (!BlockUtil.isReplaceable(neighbor)) {
-                Vec3 hitVec = BlockUtil.getHitVec(neighbor, facing.getOpposite());
+    
+                float yaw = mc.thePlayer.rotationYaw;
+                float pitch = mc.thePlayer.rotationPitch;
+    
+                Vec3 hitVec = BlockUtil.getHitVec(
+                        neighbor,
+                        facing.getOpposite(),
+                        yaw,
+                        pitch
+                );
+    
                 if (mc.playerController.onPlayerRightClick(
                         mc.thePlayer,
                         mc.theWorld,
