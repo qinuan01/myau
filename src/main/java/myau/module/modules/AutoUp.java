@@ -73,17 +73,15 @@ public class AutoUp extends Module {
 
     // 放置脚下方块
     private void placeBlock(BlockPos pos) {
-        int slot = ItemUtil.findBlockInHotbar();
-        if (slot == -1) return;
-
-        mc.thePlayer.inventory.currentItem = slot;
-
+    
+        if (mc.thePlayer.getHeldItem() == null) return;
+    
         Vec3 hitVec = new Vec3(
                 pos.getX() + 0.5,
                 pos.getY(),
                 pos.getZ() + 0.5
         );
-
+    
         mc.playerController.onPlayerRightClick(
                 mc.thePlayer,
                 mc.theWorld,
@@ -92,7 +90,7 @@ public class AutoUp extends Module {
                 EnumFacing.UP,
                 hitVec
         );
-
+    
         mc.thePlayer.swingItem();
     }
 }
